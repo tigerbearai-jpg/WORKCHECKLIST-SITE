@@ -9,7 +9,7 @@ const text = (v) => (v == null ? '' : String(v));
 const html = (v) => text(v).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const setStatus = (m) => { if(el('syncStatus')) el('syncStatus').textContent = m; };
 let currentOwner = null;
-let items = [], steps = [], tasks = [], projects = [], categories = [], suggestions = [];
+let items = [], steps = [], tasks = [], projects = [], categories = [], itemProjects = [], suggestions = [];
 let importLocked = true; // Until source migration is verified and released.
 
 async function mustLogin() {
@@ -39,7 +39,7 @@ function selectedItem(){return items.find(x=>x.item_id===el('syncItem').value)}
 function selectedStep(){return steps.find(x=>x.step_id===el('syncStep').value)}
 function redrawSelectors(){
   options(el('syncProject'),projects,x=>x.project_name,x=>x.project_name,'不指定项目');
-  options(el('syncItem'),items,x=>x.item_id,x=>`${x.title}（${x.project_name||'未分类'}）`,'请选择已有工作事项');
+  options(el('syncItem'),items,x=>x.item_id,x=>`${itemProjects.filter(p=>p.item_id===x.item_id).map(p=>p.project_name).join('、')||x.project_name||'未归属'}（${x.title}）`,'请选择已有工作事项');
   options(el('syncCategory'),categories,x=>x.category_name,x=>x.category_name,'不指定分类');
   updateChildSelectors();
 }
@@ -78,10 +78,12 @@ function recognition(){
   else if(/新增任务|下一项任务/.test(input))kind.value='task';
   else kind.value='progress';
   suggestions=items.map(w=>{
-    const project=projects.find(p=>p.project_name===w.project_name);
-    const pts=Math.max(score(w.title,input)*0.75,score(w.project_name,input)*0.40) + (project&&input.includes(project.project_name)?0.28:0);
+    const linked=itemProjects.filter(p=>p.item_id===w.item_id).map(p=>p.project_name);
+    const projectText=linked.join('、')||w.project_name||'';
+    const projectHit=linked.some(name=>input.includes(name))||(w.project_name&&input.includes(w.project_name));
+    const pts=Math.max(score(w.title,input)*0.75,score(projectText,input)*0.40)+(projectHit?0.28:0);
     const best=steps.filter(s=>s.item_id===w.item_id).map(s=>({...s,match:score(s.title,input)})).sort((a,b)=>b.match-a.match)[0];
-    return {item_id:w.item_id,step_id:best?.match>=0.52?best.step_id:null,label:`${w.project_name||'未归属'} / ${w.title}${best?.match>=0.52?' / '+best.title:''}`,score:Math.min(1,pts+(best?.match||0)*0.25)};
+    return {item_id:w.item_id,step_id:best?.match>=0.52?best.step_id:null,label:`${projectText||'未归属'} / ${w.title}${best?.match>=0.52?' / '+best.title:''}`,score:Math.min(1,pts+(best?.match||0)*0.25)};
   }).filter(x=>x.score>0.15).sort((a,b)=>b.score-a.score).slice(0,3);
   if(suggestions[0]?.score>=0.65 && suggestions[0].score-(suggestions[1]?.score||0)>=0.20){
     el('syncItem').value=suggestions[0].item_id;updateChildSelectors();
@@ -152,7 +154,7 @@ async function refreshInbox(){
 }
 async function reload(){
   await mustLogin();
-  [items,steps,tasks,projects,categories]=await Promise.all(['work_items','work_steps','work_tasks','work_projects','work_categories'].map(list));
+  [items,steps,tasks,projects,categories,itemProjects]=await Promise.all(['work_items','work_steps','work_tasks','work_projects','work_categories','work_item_projects'].map(list));
   redrawSelectors();await refreshInbox();
 }
 async function withError(fn){try{await fn()}catch(e){setStatus('操作失败：'+(e?.message||e))}}
