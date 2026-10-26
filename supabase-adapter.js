@@ -47,18 +47,23 @@ function requireWrite(){if(IMPORT_LOCKED)throw Error('为防止覆盖原始数�
 async function writeLog(itemId,action,details,stepId='',previous='',next=''){
   await insertRows('work_action_logs',[{item_id:itemId||null,action,details,step_id:stepId||null,event_time:new Date().toISOString(),event_date:today(),previous_value:previous||null,new_value:next||null}]);
 }
-function shapeWork(rows,stepRows){return rows.map(r=>{
+function shapeWork(rows,stepRows,projectLinks,projectRows){return rows.map(r=>{
   const steps=stepRows.filter(s=>s.item_id===r.item_id).sort((a,b)=>a.ordinal-b.ordinal).map(s=>({
     id:s.step_id,workId:s.item_id,order:s.ordinal,text:s.title,status:s.state||'待完成',hint:str(s.reminders),materials:str(s.required_docs),risk:str(s.risk_notes),source:str(s.sop_origin),completedAt:dateOnly(s.finished_date)
   }));
   const applicable=steps.filter(s=>s.status!=='不适用');
   const cells=r.source_json?.cells||[];
-  return {id:r.item_id,name:str(r.title),category:str(r.category_name),project:str(r.project_name),phase:str(r.project_status),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
+  const linked=(projectLinks||[]).filter(x=>x.item_id===r.item_id).map(x=>x.project_name).sort((a,b)=>a.localeCompare(b,'zh-CN'));
+  const projectNames=linked.length?linked:(str(r.project_name).trim()?[str(r.project_name).trim()]:[]);
+  const projectByName=new Map((projectRows||[]).map(x=>[x.project_name,x]));
+  const phaseNames=[...new Set(projectNames.map(name=>str(projectByName.get(name)?.project_status)).filter(Boolean))];
+  const projectDisplay=projectNames.map(name=>{const phase=str(projectByName.get(name)?.project_status);return phase?name+'（'+phase+'）':name;}).join('、');
+  return {id:r.item_id,name:str(r.title),category:str(r.category_name),project:projectNames.join('、'),projects:projectNames,projectDisplay,phase:phaseNames.join('、'),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
 });}
 async function allData(){
- const tables=['work_items','work_steps','work_categories','work_projects','work_sop_templates'];
- const [items,steps,categories,projects,templates]=await Promise.all(tables.map(selectTable));
- return {work:shapeWork(items,steps),categories:categories.map(x=>x.category_name).sort(),projects:projects.map(x=>({name:x.project_name,phase:str(x.project_status)})).sort((a,b)=>a.name.localeCompare(b.name)),templates:templates.map(x=>({id:x.sop_id,name:x.template_name,category:str(x.category_name),keywords:str(x.keywords),condition:str(x.conditions),version:str(x.version),status:str(x.state)}))};
+ const tables=['work_items','work_steps','work_categories','work_projects','work_sop_templates','work_item_projects'];
+ const [items,steps,categories,projects,templates,projectLinks]=await Promise.all(tables.map(selectTable));
+ return {work:shapeWork(items,steps,projectLinks,projects),categories:categories.map(x=>x.category_name).sort(),projects:projects.map(x=>({name:x.project_name,phase:str(x.project_status)})).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN')),templates:templates.map(x=>({id:x.sop_id,name:x.template_name,category:str(x.category_name),keywords:str(x.keywords),condition:str(x.conditions),version:str(x.version),status:str(x.state)}))};
 }
 function cleanDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(str(s))?s:null;}
 function formatStep(s){return {text:s.title,completedAt:dateOnly(s.finished_date),status:s.state,workId:s.item_id};}
@@ -69,7 +74,7 @@ async function historyQuery(options={}){
  const [d,logs,aiLogs]=await Promise.all([allData(),selectTable('work_action_logs'),selectTable('work_activity_events')]);
  const inRange=s=>!!s&&(!from||s>=from)&&(!to||s<=to);
  const events=[...logs.map(x=>({id:str(x.item_id),action:str(x.action),description:str(x.details),eventDate:dateOnly(x.event_date)||dateOnly(x.event_time),stepId:str(x.step_id)})),...aiLogs.map(x=>({id:str(x.item_id),action:'GPT工作同步',description:str(x.summary),eventDate:dateOnly(x.occurred_at),stepId:str(x.step_id)}))].filter(x=>inRange(x.eventDate));
- const rows=d.work.filter(w=>w.status!=='已删除'&&(!category||w.category===category)&&(!project||w.project===project)&&(!keyword||(w.name+w.progress+w.project).toLowerCase().includes(keyword.toLowerCase()))).map(w=>{
+ const rows=d.work.filter(w=>w.status!=='已删除'&&(!category||w.category===category)&&(!project||(w.projects||[w.project]).includes(project))&&(!keyword||(w.name+w.progress+w.project).toLowerCase().includes(keyword.toLowerCase()))).map(w=>{
    const acts=events.filter(e=>e.id===w.id);
    const completed=w.steps.filter(s=>s.status==='已完成'&&inRange(s.completedAt)).map(s=>({text:s.text,date:s.completedAt}));
    const inPeriod=mode==='started'?inRange(w.start):mode==='completed'?completed.length>0||acts.some(x=>x.action==='修改事项状态'&&x.description.endsWith('已完成')):mode==='all'?true:acts.length>0||completed.length>0;
@@ -90,9 +95,25 @@ const backend={
  async categoryAdd(name){requireWrite();if(!str(name).trim())throw Error('请输入分类名称');await insertRows('work_categories',[{category_name:name.trim()}]);return allData()},
  async projectAdd(name,phase){requireWrite();if(!str(name).trim())throw Error('请输入项目名称');await insertRows('work_projects',[{project_name:name.trim(),project_status:phase||'筹备'}]);return allData()},
  async taxonomyManage(kind,action,oldName,newName,phase){requireWrite();const {data,error}=await db.rpc('work_taxonomy_manage',{p_kind:kind,p_action:action,p_old_name:oldName,p_new_name:newName,p_phase:phase||null});err(error);return data},
- async saveWork(p){requireWrite();if(!str(p?.name).trim())throw Error('工作名称不能为空');const uid=await userId(),id=p.id||('W'+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
- const payload={owner_id:uid,item_id:id,title:p.name,category_name:nz(p.category),project_name:nz(p.project),project_status:nz(p.phase),item_status:p.status||'进行中',followup_status:nz(p.follow),latest_progress:nz(p.progress),last_progress_date:cleanDate(p.start),target_date:cleanDate(p.due),confidence:nz(p.note),sop_id:nz(p.sop),updated_at:new Date().toISOString()};
- const {error}=await db.from('work_items').upsert(payload,{onConflict:'owner_id,item_id'});err(error);await writeLog(id,p.id?'修改事项':'新增事项',p.name);return {id};},
+ async saveWork(p){
+ requireWrite();
+ if(!str(p?.name).trim())throw Error('工作名称不能为空');
+ const uid=await userId(),id=p.id||('W'+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
+ const selected=[...new Set((Array.isArray(p.projects)?p.projects:(p.project?[p.project]:[])).map(x=>str(x).trim()).filter(Boolean))];
+ let projectRows=[];
+ if(selected.length){const result=await db.from('work_projects').select('project_name,project_status').eq('owner_id',uid).in('project_name',selected);err(result.error);projectRows=result.data||[];}
+ const known=new Set(projectRows.map(x=>x.project_name)),missing=selected.filter(x=>!known.has(x));
+ if(missing.length)throw Error('以下项目已不存在，请刷新后重新选择：'+missing.join('、'));
+ const primary=selected[0]||null,primaryRow=projectRows.find(x=>x.project_name===primary);
+ const payload={owner_id:uid,item_id:id,title:p.name,category_name:nz(p.category),project_name:primary,project_status:nz(primaryRow?.project_status||p.phase),item_status:p.status||'进行中',followup_status:nz(p.follow),latest_progress:nz(p.progress),last_progress_date:cleanDate(p.start),target_date:cleanDate(p.due),confidence:nz(p.note),sop_id:nz(p.sop),updated_at:new Date().toISOString()};
+ const {error}=await db.from('work_items').upsert(payload,{onConflict:'owner_id,item_id'});err(error);
+ const {data:oldLinks,error:oldError}=await db.from('work_item_projects').select('project_name').eq('owner_id',uid).eq('item_id',id);err(oldError);
+ if(selected.length){const {error:linkError}=await db.from('work_item_projects').upsert(selected.map(project_name=>({owner_id:uid,item_id:id,project_name})),{onConflict:'owner_id,item_id,project_name'});err(linkError);}
+ const removed=(oldLinks||[]).map(x=>x.project_name).filter(name=>!selected.includes(name));
+ if(removed.length){const {error:removeError}=await db.from('work_item_projects').delete().eq('owner_id',uid).eq('item_id',id).in('project_name',removed);err(removeError);}
+ await writeLog(id,p.id?'修改事项':'新增事项',p.name+'；所属项目：'+(selected.join('、')||'未关联项目'));
+ return {id};
+ },
  async saveSteps(workId,list){requireWrite();if(!workId)throw Error('缺少事项ID');const uid=await userId();const old=(await selectTable('work_steps')).filter(s=>s.item_id===workId),ids=new Set();const incoming=(list||[]).filter(s=>str(s.text).trim()).map((s,i)=>{const id=s.id||crypto.randomUUID();ids.add(id);const previous=old.find(o=>o.step_id===id);return {owner_id:uid,step_id:id,item_id:workId,ordinal:i+1,title:str(s.text),state:s.status||'待完成',reminders:nz(s.hint),required_docs:nz(s.materials),risk_notes:nz(s.risk),sop_origin:nz(s.source),finished_date:s.status==='已完成'?(cleanDate(s.completedAt)||cleanDate(previous?.finished_date)||today()):null};});
  if(incoming.length){const {error}=await db.from('work_steps').upsert(incoming,{onConflict:'owner_id,step_id'});err(error)}
  const toDelete=old.filter(s=>!ids.has(s.step_id));if(toDelete.length){const {error}=await db.from('work_steps').delete().eq('owner_id',uid).eq('item_id',workId).in('step_id',toDelete.map(s=>s.step_id));err(error)}
