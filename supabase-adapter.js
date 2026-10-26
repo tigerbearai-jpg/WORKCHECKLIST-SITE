@@ -3,7 +3,7 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 
 const db = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-const IMPORT_LOCKED = true; // Switch to false ONLY AFTER source rows are verified and assigned to the signed-in account.
+const IMPORT_LOCKED = false; // Historical data has been verified and assigned to the signed-in account.
 let currentUser = null;
 const $ = id=>document.getElementById(id);
 const str = v => (v === null || v === undefined ? '' : String(v));
