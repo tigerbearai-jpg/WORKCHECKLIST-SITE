@@ -38,9 +38,9 @@ function options(node, data, getValue, getName, placeholder) {
 function selectedItem(){return items.find(x=>x.item_id===el('syncItem').value)}
 function selectedStep(){return steps.find(x=>x.step_id===el('syncStep').value)}
 function redrawSelectors(){
-  options(el('syncProject'),projects,x=>x.project_name,x=>x.project_name,'不指定项目');
+  options(el('syncProject'),projects.filter(p=>p.is_active!==false),x=>x.project_name,x=>x.project_name,'不指定项目');
   options(el('syncItem'),items,x=>x.item_id,x=>`${itemProjects.filter(p=>p.item_id===x.item_id).map(p=>p.project_name).join('、')||x.project_name||'未归属'}（${x.title}）`,'请选择已有工作事项');
-  options(el('syncCategory'),categories,x=>x.category_name,x=>x.category_name,'不指定分类');
+  options(el('syncCategory'),categories.filter(c=>c.is_active!==false),x=>x.category_name,x=>x.category_name,'不指定分类');
   updateChildSelectors();
 }
 function updateChildSelectors(){
