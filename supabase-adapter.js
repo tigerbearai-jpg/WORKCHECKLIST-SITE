@@ -1,7 +1,7 @@
 /* WORKCHECKLIST migration adapter. No secret/service_role keys may be used here. */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.0/+esm';
-import { currentProgress, categoryNames, filterWork } from './work-model.js';
-window.workModel={currentProgress,categoryNames,filterWork};
+import { currentProgress, categoryNames, filterWork, urgencyRank, workUrgency, sortByUrgency } from './work-model.js';
+window.workModel={currentProgress,categoryNames,filterWork,urgencyRank,workUrgency,sortByUrgency};
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 
 const db = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
@@ -60,7 +60,7 @@ function shapeWork(rows,stepRows,projectLinks,projectRows){return rows.map(r=>{
   const projectByName=new Map((projectRows||[]).map(x=>[x.project_name,x]));
   const phaseNames=[...new Set(projectNames.map(name=>str(projectByName.get(name)?.project_status)).filter(Boolean))];
   const projectDisplay=projectNames.map(name=>{const phase=str(projectByName.get(name)?.project_status);return phase?name+'（'+phase+'）':name;}).join('、');
-  return {id:r.item_id,name:str(r.title),category:categoryNames(r.category_names,r.category_name).join('、'),categories:categoryNames(r.category_names,r.category_name),projectDetails:projectNames.map(name=>({name,phase:str(projectByName.get(name)?.project_status||r.project_status)})),project:projectNames.join('、'),projects:projectNames,projectDisplay,phase:phaseNames.join('、'),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:currentProgress(steps),progressDetail:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.notes),confidence:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
+  return {id:r.item_id,name:str(r.title),urgency:str(r.urgency)||'正常',category:categoryNames(r.category_names,r.category_name).join('、'),categories:categoryNames(r.category_names,r.category_name),projectDetails:projectNames.map(name=>({name,phase:str(projectByName.get(name)?.project_status||r.project_status)})),project:projectNames.join('、'),projects:projectNames,projectDisplay,phase:phaseNames.join('、'),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:currentProgress(steps),progressDetail:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.notes),confidence:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
 });}
 async function allData(){
  const tables=['work_items','work_steps','work_categories','work_projects','work_sop_templates','work_item_projects'];
@@ -100,6 +100,7 @@ const backend={
  async saveWork(p){
  requireWrite();
  if(!str(p?.name).trim())throw Error('工作名称不能为空');
+ if(p.urgency!==undefined&&!['紧急','急','正常'].includes(p.urgency))throw Error('事项紧急程度无效');
  const uid=await userId(),id=p.id||('W'+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
  const selected=[...new Set((Array.isArray(p.projects)?p.projects:(p.project?[p.project]:[])).map(x=>str(x).trim()).filter(Boolean))];
  let projectRows=[];
@@ -110,6 +111,7 @@ const backend={
  const selectedCategories=categoryNames(Array.isArray(p.categories)?p.categories:[],p.categories===undefined?str(p.category):'');
  const payload={owner_id:uid,item_id:id,title:p.name,project_name:primary,project_status:nz(primaryRow?.project_status||p.phase),item_status:p.status||'进行中',last_progress_date:cleanDate(p.start),target_date:cleanDate(p.due),updated_at:new Date().toISOString()};
  if(p.categories!==undefined||p.category!==undefined||!p.id){payload.category_name=selectedCategories[0]||null;payload.category_names=selectedCategories;}
+ if(p.urgency!==undefined)payload.urgency=p.urgency;
  if(p.progress!==undefined)payload.latest_progress=nz(p.progress);
  if(p.note!==undefined)payload.notes=nz(p.note);
  if(p.follow!==undefined)payload.followup_status=nz(p.follow);

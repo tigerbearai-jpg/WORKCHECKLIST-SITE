@@ -24,3 +24,13 @@ export function filterWork(work,filters){
    (!filters.status||w.status===filters.status);
  });
 }
+
+export function urgencyRank(value){
+ return value==='紧急'?0:value==='急'?1:2;
+}
+export function workUrgency(work){
+ return ['紧急','急','正常'][urgencyRank(work.urgency)];
+}
+export function sortByUrgency(work){
+ return work.map((item,index)=>({item,index})).sort((a,b)=>urgencyRank(workUrgency(a.item))-urgencyRank(workUrgency(b.item))||a.index-b.index).map(({item})=>item);
+}

@@ -110,3 +110,66 @@ test('GPT sync still lists every linked project and mobile lists have no horizon
  const label=await page.locator('#syncItem option[value="w0"]').textContent();assert(label.includes('甲')&&label.includes('乙'));
  await page.locator('.nav [data-page="home"]').click();await edit(page,'home','w0');assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 });
+
+
+test('steps can move up and down, retain their identity and dates, and persist only when saved',async t=>{
+ const {page,store}=await open(t,{width:390,height:844});
+ await store.db.query("update work_steps set state='已完成',finished_date='2026-10-25',reminders='签署提示',required_docs='签署材料',risk_notes='签署风险' where step_id='s24b'");
+ await store.db.query("insert into work_steps(owner_id,step_id,item_id,ordinal,title,state) values($1,'s24c','w24',3,'归档','待完成')",[A]);
+ await page.getByRole('button',{name:'刷新',exact:true}).click();await page.waitForFunction(()=>document.getElementById('loadStatus').classList.contains('ok'));
+ await edit(page,'home','w24');
+ const row=i=>page.locator('#stepsEditor .step-item').nth(i);
+ assert(await row(0).getByRole('button',{name:'上移第1步',exact:true}).isDisabled());
+ assert(await row(2).getByRole('button',{name:'下移第3步',exact:true}).isDisabled());
+ await row(0).locator('textarea').fill('核价更新');
+ await row(0).getByRole('button',{name:'下移第1步',exact:true}).click();
+ assert.deepEqual(await page.locator('#stepsEditor textarea').evaluateAll(es=>es.map(e=>e.value)),['签署','核价更新','归档']);
+ assert.equal(await page.locator('#currentProgress').textContent(),'核价更新');
+ assert.equal(await row(0).getByLabel('实际完成日期').inputValue(),'2026-10-25');
+ assert.match(await row(0).textContent(),/签署提示/);assert.match(await row(0).textContent(),/签署材料/);assert.match(await row(0).textContent(),/签署风险/);
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ await save(page);await page.waitForSelector('#home.active');
+ const saved=(await store.db.query("select step_id,ordinal,title,state,finished_date::text,reminders,required_docs,risk_notes from work_steps where item_id='w24' order by ordinal")).rows;
+ assert.deepEqual(saved.map(s=>[s.step_id,s.ordinal,s.title,s.state]),[['s24b',1,'签署','已完成'],['s24a',2,'核价更新','进行中'],['s24c',3,'归档','待完成']]);
+ assert.equal(saved[0].finished_date,'2026-10-25');assert.equal(saved[0].reminders,'签署提示');assert.equal(saved[0].required_docs,'签署材料');assert.equal(saved[0].risk_notes,'签署风险');
+ await edit(page,'home','w24');assert.deepEqual(await page.locator('#stepsEditor textarea').evaluateAll(es=>es.map(e=>e.value)),['签署','核价更新','归档']);
+ await row(1).getByRole('button',{name:'上移第2步',exact:true}).focus();await page.keyboard.press('Enter');
+ assert.equal(await row(0).locator('textarea').inputValue(),'核价更新');
+ assert.equal(await page.locator('#currentProgress').textContent(),'核价更新');
+ await page.getByRole('button',{name:'取消',exact:true}).click();await page.waitForSelector('#home.active');
+ await edit(page,'home','w24');assert.deepEqual(await page.locator('#stepsEditor textarea').evaluateAll(es=>es.map(e=>e.value)),['签署','核价更新','归档']);
+ assert.equal(await row(0).getByLabel('实际完成日期').inputValue(),'2026-10-25');
+});
+
+test('work item urgency persists, orders home cards and respects filters without saving cancelled changes',async t=>{
+ const {page,store}=await open(t);
+ assert.equal(await page.locator('#taxUrgency').count(),0);
+ await page.locator('header button.primary').click();assert.equal(await page.inputValue('#workUrgency'),'正常');
+ await page.getByRole('button',{name:'取消',exact:true}).click();await page.waitForSelector('#home.active');
+ const setUrgency=async(id,urgency)=>{
+  await edit(page,'home',id);await page.selectOption('#workUrgency',urgency);await save(page);await page.waitForSelector('#home.active');
+ };
+ await setUrgency('w8','紧急');await setUrgency('w16','紧急');await setUrgency('w4','急');await setUrgency('w12','正常');
+ const underlying=await page.evaluate(()=>DB.work.filter(work=>work.status==='进行中').map(work=>work.id));
+ const urgent=new Set(['w8','w16']);
+ const expected=[...underlying.filter(id=>urgent.has(id)),...underlying.filter(id=>id==='w4'),...underlying.filter(id=>!urgent.has(id)&&id!=='w4')];
+ assert.deepEqual(await ids(page,'home'),expected);
+ for(const [id,urgency] of [['w8','紧急'],['w16','紧急'],['w4','急'],['w12','正常']])assert.equal(await page.locator(`#homeCards [data-work-id="${id}"] .urgency-badge`).textContent(),urgency);
+ await page.selectOption('#homeProject','乙');await page.selectOption('#homePhase','筹备');await page.selectOption('#homeCategory','采购');
+ const categoryMatches=await page.evaluate(()=>DB.work.filter(work=>work.status==='进行中'&&work.categories.includes('采购')).map(work=>work.id));
+ assert.deepEqual(await ids(page,'home'),expected.filter(id=>categoryMatches.includes(id)));
+ await page.fill('#homeSearch','事项12');assert.deepEqual(await ids(page,'home'),['w12']);
+ await page.fill('#homeSearch','');await page.selectOption('#homeProject','');await page.selectOption('#homePhase','');await page.selectOption('#homeCategory','');
+ for(const mode of ['done','paused']){await page.locator(`[data-mode="${mode}"]`).click();assert.equal((await ids(page,'home')).length,10);}
+ await page.locator('[data-mode="open"]').click();assert.deepEqual(await ids(page,'home'),expected);
+ await edit(page,'home','w8');assert.equal(await page.inputValue('#workUrgency'),'紧急');
+ await page.selectOption('#workUrgency','正常');await page.getByRole('button',{name:'取消',exact:true}).click();await page.waitForSelector('#home.active');
+ assert.deepEqual(await ids(page,'home'),expected);
+ await edit(page,'home','w8');assert.equal(await page.inputValue('#workUrgency'),'紧急');
+ await page.getByRole('button',{name:'取消',exact:true}).click();await page.waitForSelector('#home.active');
+ const saved=(await store.db.query("select item_id,urgency from work_items where owner_id=$1 and item_id in ('w8','w16','w4','w12') order by item_id",[A])).rows;
+ assert.deepEqual(saved.map(work=>[work.item_id,work.urgency]),[['w12','正常'],['w16','紧急'],['w4','急'],['w8','紧急']]);
+ await page.reload();await page.waitForFunction(()=>document.getElementById('loadStatus').classList.contains('ok'));
+ assert.deepEqual(await ids(page,'home'),expected);
+ await edit(page,'home','w4');assert.equal(await page.inputValue('#workUrgency'),'急');
+});
