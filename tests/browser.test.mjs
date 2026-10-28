@@ -45,17 +45,23 @@ test('status is prominent, percentages removed and step-free items remain valid'
  assert(!/待规划|\d+%/.test(await card.textContent()));assert.equal(await card.locator('.progress').getAttribute('aria-label'),'未拆分步骤');
  await page.locator('[data-mode="done"]').click();assert.equal(await page.locator('#homeCards .progress > div').first().evaluate(el=>el.style.width),'100%');
 });
-test('categories, notes and current progress save through the real adapter and SQL without losing multi-project links',async t=>{
+test('notes-only editor preserves legacy progress and cards derive progress from steps',async t=>{
  const {page,store}=await open(t);await edit(page,'home','w4');
+ assert.equal(await page.locator('#workProgress, #currentProgress').count(),0);
+ assert.equal(await page.locator('#editor .fields textarea').count(),1);
  await page.locator('#workCategories input[value="采购"]').check();await page.fill('#workNote','新的长期备注');
  await page.waitForFunction(()=>document.getElementById('sopMatches').textContent.includes('采购模板'));
  assert.equal((await page.evaluate(()=>contextObj())).projects.length,2);
  await save(page);await page.waitForSelector('#home.active');
- const row=(await store.db.query("select category_names,notes,confidence from work_items where owner_id=$1 and item_id='w4'",[A])).rows[0];
- assert.deepEqual(row.category_names,['合同','采购']);assert.equal(row.notes,'新的长期备注');assert.equal(row.confidence,'已核实');
- await edit(page,'home','w24');assert.equal(await page.locator('#currentProgress').textContent(),'核价｜进展说明');
- await page.locator('#stepsEditor select').first().selectOption('已完成');assert.equal(await page.locator('#currentProgress').textContent(),'待开始下一步｜进展说明');
- await save(page);await page.waitForSelector('#home.active');assert.equal((await store.db.query("select state from work_steps where step_id='s24b'")).rows[0].state,'待完成');
+ const row=(await store.db.query("select category_names,notes,confidence,latest_progress from work_items where owner_id=$1 and item_id='w4'",[A])).rows[0];
+ assert.deepEqual(row.category_names,['合同','采购']);assert.equal(row.notes,'新的长期备注');assert.equal(row.confidence,'已核实');assert.equal(row.latest_progress,'进展说明');
+ const preview=id=>page.locator(`#homeCards [data-work-id="${id}"] .step-preview > div`).nth(1);
+ assert.equal(await preview('w4').textContent(),'暂无进行中步骤');
+ assert((await page.locator('#homeCards [data-work-id="w4"]').textContent()).includes('新的长期备注'));
+ assert.equal(await preview('w24').textContent(),'核价');
+ await edit(page,'home','w24');await page.locator('#stepsEditor select').first().selectOption('已完成');
+ const context=await page.evaluate(()=>contextObj());assert.equal(context.progress,'待开始下一步');assert.equal(context.note,'背景');assert(!('progressDetail' in context));
+ await save(page);await page.waitForSelector('#home.active');assert.equal(await preview('w24').textContent(),'待开始下一步');assert.equal((await store.db.query("select state from work_steps where step_id='s24b'")).rows[0].state,'待完成');
 });
 test('return/cancel/save preserve filters, status selection, expanded steps and viewport on both lists',async t=>{
  const {page}=await open(t);

@@ -22,25 +22,25 @@ test('no login cannot read work or invoke maintenance; users are isolated on rea
  assert((await store.request({action:'rpc',fn:'work_taxonomy_manage',args:{p_kind:'project',p_action:'disable',p_old_name:'甲'}},null)).error);
 });
 test('progress, categories and project-phase filters handle parallel steps and multi-project membership',async()=>{
- assert.equal(currentProgress([{text:'核价',status:'进行中'},{text:'审批',status:'进行中'}],'等反馈'),'核价；审批｜等反馈');
+ assert.equal(currentProgress([{text:'核价',status:'进行中'},{text:'审批',status:'进行中'}]),'核价；审批');
  assert.equal(currentProgress([{text:'签署',status:'待完成'}]),'待开始下一步');
- assert.equal(currentProgress([],'手动说明'),'手动说明');
- const d=await backend.data(),w=d.work.find(x=>x.id==='w24');assert.equal(w.projects.length,2);assert.equal(w.progress,'核价｜进展说明');
+ assert.equal(currentProgress([]),'暂无进行中步骤');
+ const d=await backend.data(),w=d.work.find(x=>x.id==='w24');assert.equal(w.projects.length,2);assert.equal(w.progress,'核价');
  assert.equal(filterWork([w],{project:'乙',phase:'筹备',category:'采购'}).length,1);
  assert.equal(filterWork([w],{project:'甲',phase:'筹备'}).length,0,'phase must belong to the selected project');
 });
 test('save multi-category and notes without losing projects, confidence, SOP or followup',async()=>{
  await store.db.query("update work_items set sop_id='original',followup_status='跟进' where owner_id=$1 and item_id='w4'",[A]);
- await backend.saveWork({id:'w4',name:'事项4',categories:['合同','采购'],projects:['甲','乙'],note:'新备注',progress:'补充说明'});
+ await backend.saveWork({id:'w4',name:'事项4',categories:['合同','采购'],projects:['甲','乙'],note:'新备注'});
  const row=(await store.db.query("select * from work_items where owner_id=$1 and item_id='w4'",[A])).rows[0];
- assert.deepEqual(row.category_names,['合同','采购']);assert.equal(row.notes,'新备注');assert.equal(row.confidence,'已核实');assert.equal(row.sop_id,'original');assert.equal(row.followup_status,'跟进');
+ assert.deepEqual(row.category_names,['合同','采购']);assert.equal(row.notes,'新备注');assert.equal(row.confidence,'已核实');assert.equal(row.latest_progress,'进展说明');assert.equal(row.sop_id,'original');assert.equal(row.followup_status,'跟进');
  assert.equal((await backend.data()).work.find(x=>x.id==='w4').projects.length,2);
  assert.equal((await backend.matchSop(['合同','采购'],'事项')).length,2);
  assert((await backend.historyQuery({mode:'all',category:'采购'})).rows.some(x=>x.id==='w4'));
 });
 test('step completion retains history and never starts the next step',async()=>{
  await backend.saveSteps('w24',[{id:'s24a',text:'核价',status:'已完成',completedAt:'2026-10-27'},{id:'s24b',text:'签署',status:'待完成'}]);
- const w=(await backend.data()).work.find(w=>w.id==='w24');assert.equal(w.progress,'待开始下一步｜进展说明');assert.equal(w.steps[1].status,'待完成');
+ const w=(await backend.data()).work.find(w=>w.id==='w24');assert.equal(w.progress,'待开始下一步');assert.equal(w.steps[1].status,'待完成');
  assert((await backend.historyQuery({mode:'all'})).rows.find(w=>w.id==='w24').events.some(e=>e.action==='完成工作步骤'));
 });
 test('category rename/merge updates all memberships and SOPs without duplicates; deletion protects references',async()=>{
