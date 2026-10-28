@@ -1,5 +1,7 @@
 /* WORKCHECKLIST migration adapter. No secret/service_role keys may be used here. */
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.0/+esm';
+import { currentProgress, categoryNames, filterWork } from './work-model.js';
+window.workModel={currentProgress,categoryNames,filterWork};
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './config.js';
 
 const db = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
@@ -58,12 +60,12 @@ function shapeWork(rows,stepRows,projectLinks,projectRows){return rows.map(r=>{
   const projectByName=new Map((projectRows||[]).map(x=>[x.project_name,x]));
   const phaseNames=[...new Set(projectNames.map(name=>str(projectByName.get(name)?.project_status)).filter(Boolean))];
   const projectDisplay=projectNames.map(name=>{const phase=str(projectByName.get(name)?.project_status);return phase?name+'（'+phase+'）':name;}).join('、');
-  return {id:r.item_id,name:str(r.title),category:str(r.category_name),project:projectNames.join('、'),projects:projectNames,projectDisplay,phase:phaseNames.join('、'),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
+  return {id:r.item_id,name:str(r.title),category:categoryNames(r.category_names,r.category_name).join('、'),categories:categoryNames(r.category_names,r.category_name),projectDetails:projectNames.map(name=>({name,phase:str(projectByName.get(name)?.project_status||r.project_status)})),project:projectNames.join('、'),projects:projectNames,projectDisplay,phase:phaseNames.join('、'),status:str(r.item_status)||'进行中',follow:str(r.followup_status),progress:currentProgress(steps,str(r.latest_progress)),progressDetail:str(r.latest_progress),legacyNext:str(r.next_step||cells[8]),start:dateOnly(r.last_progress_date),followDate:dateOnly(r.next_followup_date),due:dateOnly(r.target_date),note:str(r.notes),confidence:str(r.confidence),sop:str(r.sop_id),percent:applicable.length?Math.round(applicable.filter(s=>s.status==='已完成').length/applicable.length*100):null,steps};
 });}
 async function allData(){
  const tables=['work_items','work_steps','work_categories','work_projects','work_sop_templates','work_item_projects'];
  const [items,steps,categories,projects,templates,projectLinks]=await Promise.all(tables.map(selectTable));
- return {work:shapeWork(items,steps,projectLinks,projects),categories:categories.map(x=>x.category_name).sort(),projects:projects.map(x=>({name:x.project_name,phase:str(x.project_status)})).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN')),templates:templates.map(x=>({id:x.sop_id,name:x.template_name,category:str(x.category_name),keywords:str(x.keywords),condition:str(x.conditions),version:str(x.version),status:str(x.state)}))};
+ return {work:shapeWork(items,steps,projectLinks,projects),categories:categories.filter(x=>x.is_active!==false).map(x=>x.category_name).sort(),categoryElements:categories.map(x=>({name:x.category_name,inactive:x.is_active===false})),projects:projects.map(x=>({name:x.project_name,phase:str(x.project_status),inactive:x.is_active===false})).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN')),templates:templates.map(x=>({id:x.sop_id,name:x.template_name,category:str(x.category_name),keywords:str(x.keywords),condition:str(x.conditions),version:str(x.version),status:str(x.state)}))};
 }
 function cleanDate(s){return /^\d{4}-\d{2}-\d{2}$/.test(str(s))?s:null;}
 function formatStep(s){return {text:s.title,completedAt:dateOnly(s.finished_date),status:s.state,workId:s.item_id};}
@@ -74,7 +76,7 @@ async function historyQuery(options={}){
  const [d,logs,aiLogs]=await Promise.all([allData(),selectTable('work_action_logs'),selectTable('work_activity_events')]);
  const inRange=s=>!!s&&(!from||s>=from)&&(!to||s<=to);
  const events=[...logs.map(x=>({id:str(x.item_id),action:str(x.action),description:str(x.details),eventDate:dateOnly(x.event_date)||dateOnly(x.event_time),stepId:str(x.step_id)})),...aiLogs.map(x=>({id:str(x.item_id),action:'GPT工作同步',description:str(x.summary),eventDate:dateOnly(x.occurred_at),stepId:str(x.step_id)}))].filter(x=>inRange(x.eventDate));
- const rows=d.work.filter(w=>w.status!=='已删除'&&(!category||w.category===category)&&(!project||(w.projects||[w.project]).includes(project))&&(!keyword||(w.name+w.progress+w.project).toLowerCase().includes(keyword.toLowerCase()))).map(w=>{
+ const rows=d.work.filter(w=>w.status!=='已删除'&&(!category||w.categories.includes(category))&&(!project||(w.projects||[w.project]).includes(project))&&(!keyword||(w.name+w.progress+w.project).toLowerCase().includes(keyword.toLowerCase()))).map(w=>{
    const acts=events.filter(e=>e.id===w.id);
    const completed=w.steps.filter(s=>s.status==='已完成'&&inRange(s.completedAt)).map(s=>({text:s.text,date:s.completedAt}));
    const inPeriod=mode==='started'?inRange(w.start):mode==='completed'?completed.length>0||acts.some(x=>x.action==='修改事项状态'&&x.description.endsWith('已完成')):mode==='all'?true:acts.length>0||completed.length>0;
@@ -105,7 +107,12 @@ const backend={
  const known=new Set(projectRows.map(x=>x.project_name)),missing=selected.filter(x=>!known.has(x));
  if(missing.length)throw Error('以下项目已不存在，请刷新后重新选择：'+missing.join('、'));
  const primary=selected[0]||null,primaryRow=projectRows.find(x=>x.project_name===primary);
- const payload={owner_id:uid,item_id:id,title:p.name,category_name:nz(p.category),project_name:primary,project_status:nz(primaryRow?.project_status||p.phase),item_status:p.status||'进行中',followup_status:nz(p.follow),latest_progress:nz(p.progress),last_progress_date:cleanDate(p.start),target_date:cleanDate(p.due),confidence:nz(p.note),sop_id:nz(p.sop),updated_at:new Date().toISOString()};
+ const selectedCategories=categoryNames(Array.isArray(p.categories)?p.categories:[],p.categories===undefined?str(p.category):'');
+ const payload={owner_id:uid,item_id:id,title:p.name,project_name:primary,project_status:nz(primaryRow?.project_status||p.phase),item_status:p.status||'进行中',latest_progress:nz(p.progress),last_progress_date:cleanDate(p.start),target_date:cleanDate(p.due),updated_at:new Date().toISOString()};
+ if(p.categories!==undefined||p.category!==undefined||!p.id){payload.category_name=selectedCategories[0]||null;payload.category_names=selectedCategories;}
+ if(p.note!==undefined)payload.notes=nz(p.note);
+ if(p.follow!==undefined)payload.followup_status=nz(p.follow);
+ if(p.sop!==undefined)payload.sop_id=nz(p.sop);
  const {error}=await db.from('work_items').upsert(payload,{onConflict:'owner_id,item_id'});err(error);
  const {data:oldLinks,error:oldError}=await db.from('work_item_projects').select('project_name').eq('owner_id',uid).eq('item_id',id);err(oldError);
  if(selected.length){const {error:linkError}=await db.from('work_item_projects').upsert(selected.map(project_name=>({owner_id:uid,item_id:id,project_name})),{onConflict:'owner_id,item_id,project_name'});err(linkError);}
@@ -117,10 +124,19 @@ const backend={
  async saveSteps(workId,list){requireWrite();if(!workId)throw Error('缺少事项ID');const uid=await userId();const old=(await selectTable('work_steps')).filter(s=>s.item_id===workId),ids=new Set();const incoming=(list||[]).filter(s=>str(s.text).trim()).map((s,i)=>{const id=s.id||crypto.randomUUID();ids.add(id);const previous=old.find(o=>o.step_id===id);return {owner_id:uid,step_id:id,item_id:workId,ordinal:i+1,title:str(s.text),state:s.status||'待完成',reminders:nz(s.hint),required_docs:nz(s.materials),risk_notes:nz(s.risk),sop_origin:nz(s.source),finished_date:s.status==='已完成'?(cleanDate(s.completedAt)||cleanDate(previous?.finished_date)||today()):null};});
  if(incoming.length){const {error}=await db.from('work_steps').upsert(incoming,{onConflict:'owner_id,step_id'});err(error)}
  const toDelete=old.filter(s=>!ids.has(s.step_id));if(toDelete.length){const {error}=await db.from('work_steps').delete().eq('owner_id',uid).eq('item_id',workId).in('step_id',toDelete.map(s=>s.step_id));err(error)}
- await writeLog(workId,'保存工作步骤',`步骤数：${incoming.length}`);return {ok:true};},
+ for(const step of incoming){
+  const previous=old.find(s=>s.step_id===step.step_id);
+  if(!previous)await writeLog(workId,'新增工作步骤',step.title,step.step_id);
+  if(step.state==='已完成'&&previous?.state!=='已完成')await writeLog(workId,'完成工作步骤',step.title,step.step_id,previous?.state||'',step.state);
+  else if(previous?.state==='已完成'&&step.state!=='已完成')await writeLog(workId,'重新打开工作步骤',step.title,step.step_id,previous.state,step.state);
+  else if(previous&&previous.state!==step.state)await writeLog(workId,'修改步骤状态',step.title,step.step_id,previous.state,step.state);
+  if(previous&&previous.title!==step.title)await writeLog(workId,'修改步骤内容',step.title,step.step_id,previous.title,step.title);
+ }
+ for(const step of toDelete)await writeLog(workId,'删除工作步骤',step.title,step.step_id);
+ return {ok:true};},
  async workDelete(id){requireWrite();await updateRows('work_items',{item_status:'已删除'},{item_id:id});await writeLog(id,'删除事项（软删除）','状态设为已删除');return {ok:true};},
  historyQuery,exportAssessment,
- async matchSop(category,description){const d=await allData();const text=str(description).toLowerCase();return d.templates.filter(t=>t.category===category&&t.status==='已发布').map(t=>({id:t.id,name:t.name,score:t.keywords.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean).filter(k=>text.includes(k)).length})).sort((a,b)=>b.score-a.score)},
+ async matchSop(category,description){const d=await allData();const text=str(description).toLowerCase();return d.templates.filter(t=>categoryNames(Array.isArray(category)?category:[],typeof category==='string'?category:'').includes(t.category)&&t.status==='已发布').map(t=>({id:t.id,name:t.name,score:t.keywords.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean).filter(k=>text.includes(k)).length})).sort((a,b)=>b.score-a.score)},
  async sopSteps(id){const rows=await stepsForSop(id);return rows.map(s=>({text:s.step_name,status:'待完成',hint:str(s.reminders),materials:str(s.required_docs),risk:str(s.risk_notes),condition:str(s.conditions),source:id}))},
  async sopDetail(id){const d=await allData();const t=d.templates.find(x=>x.id===id);if(!t)throw Error('SOP 不存在');const rows=await stepsForSop(id);return {...t,keywords:t.keywords.split(',').filter(Boolean),steps:rows.map(x=>({name:x.step_name,hint:str(x.reminders),materials:str(x.required_docs),risk:str(x.risk_notes),condition:str(x.conditions)}))}},
  async importSop(p){requireWrite();if(typeof p==='string')p=JSON.parse(p);if(!p?.name||!p.category||!Array.isArray(p.steps)||!p.steps.length)throw Error('请输入 SOP 名称、分类和步骤');const id='SOP-'+crypto.randomUUID().slice(0,8);await insertRows('work_sop_templates',[{sop_id:id,template_name:p.name,category_name:p.category,keywords:(p.keywords||[]).join(','),conditions:nz(p.condition),version:p.version||'1.0',state:p.status||'草稿'}]);await insertRows('work_sop_steps',p.steps.map((s,i)=>({sop_id:id,ordinal:i+1,step_name:str(s.name||s.text),reminders:nz(s.hint),required_docs:nz(s.materials),risk_notes:nz(s.risk),conditions:nz(s.condition)})));return {id,count:p.steps.length}},

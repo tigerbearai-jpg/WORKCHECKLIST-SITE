@@ -1,0 +1,7 @@
+{
+  "name": "workchecklist-site",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node --test --test-concurrency=1 tests/*.test.mjs"},
+  "devDependencies": {"@electric-sql/pglite": "0.5.12", "playwright": "1.62.1"}
+}
