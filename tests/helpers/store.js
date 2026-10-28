@@ -18,6 +18,7 @@ export class Store{
    grant select,insert on public.work_activity_events,public.work_tasks,public.work_sync_inbox to authenticated;
    insert into auth.users values('${A}'),('${B}');`);
   await store.db.exec(await readFile('database/202610270010_workbench.sql','utf8'));
+  await store.db.exec(await readFile('supabase/migrations/20261028064722_work_item_urgency.sql','utf8'));
   return store;
  }
  request(spec,actor=A){
@@ -30,8 +31,9 @@ export class Store{
    await this.db.query("select set_config('request.jwt.claim.sub',$1,true)",[actor||'']);
    let sql;
    if(s.action==='rpc'){
-    if(s.fn!=='work_taxonomy_manage')throw Error('Unexpected RPC');
-    sql='select public.work_taxonomy_manage('+['p_kind','p_action','p_old_name','p_new_name','p_phase'].map(k=>param(s.args[k]??null)).join(',')+') as result';
+    const parameters={work_taxonomy_manage:['p_kind','p_action','p_old_name','p_new_name','p_phase']}[s.fn];
+    if(!parameters)throw Error('Unexpected RPC');
+    sql='select public.'+identifier(s.fn)+'('+parameters.map(k=>param(s.args[k]??null)).join(',')+') as result';
    }else{
     const table='public.'+identifier(s.table);
     const where=()=>s.filters?.length?' where '+s.filters.map(f=>identifier(f.column)+(f.in?' = any('+param(f.value)+')':' = '+param(f.value))).join(' and '):'';
@@ -48,7 +50,8 @@ export class Store{
     }
    }
    const result=await this.db.query(sql,values);await this.db.exec('commit');
-   return {data:s.action==='rpc'?result.rows[0].result:result.rows,error:null};
+   // Match the JSON wire format returned by Supabase REST, including dates.
+   return {data:JSON.parse(JSON.stringify(s.action==='rpc'?result.rows[0].result:result.rows)),error:null};
   }catch(e){await this.db.exec('rollback');return {data:null,error:{message:e.message,code:e.code}};}
  }
  async seed(){
